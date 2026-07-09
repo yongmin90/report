@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from datetime import date
 from io import BytesIO
@@ -63,10 +64,55 @@ def find_default_template() -> Path | None:
     return docx_files[0] if docx_files else None
 
 
+def _find_key_in_mapping(obj, target_key: str) -> str:
+    """중첩된 secrets 구조에서도 키를 찾아 문자열로 반환."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if str(key).lower() == target_key.lower():
+                value_text = to_text(value).strip()
+                if value_text:
+                    return value_text
+            found = _find_key_in_mapping(value, target_key)
+            if found:
+                return found
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            found = _find_key_in_mapping(item, target_key)
+            if found:
+                return found
+    return ""
+
+
+def get_gemini_api_key() -> str:
+    # 1) 일반적인 top-level secrets
+    key = to_text(st.secrets.get("GEMINI_API_KEY", "")).strip()
+    if key:
+        return key
+
+    # 2) 배포 환경에서 흔한 중첩형 secrets ([api], [keys], [default] 등)
+    nested = _find_key_in_mapping(dict(st.secrets), "GEMINI_API_KEY")
+    if nested:
+        return nested
+
+    # 3) 환경변수 fallback
+    env_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    env_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    return ""
+
+
 def configure_gemini() -> tuple[bool, str]:
-    api_key = st.secrets.get("GEMINI_API_KEY", "")
+    api_key = get_gemini_api_key()
     if not api_key:
-        return False, "st.secrets에 GEMINI_API_KEY가 없습니다."
+        return (
+            False,
+            "GEMINI API 키를 찾지 못했습니다. Streamlit Secrets에 "
+            "`GEMINI_API_KEY = \"...\"` 로 등록하거나 환경변수 `GEMINI_API_KEY`를 설정하세요.",
+        )
     genai.configure(api_key=api_key)
     return True, ""
 
